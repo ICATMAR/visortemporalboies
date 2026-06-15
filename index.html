@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ICATMAR Marine Buoy Dashboard</title>
+    
+    <!-- Tailwind Play CDN for Zero-NPM execution -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Google Fonts Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+    <!-- Leaflet Map CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    
+    <!-- Standard application custom variables configuration aligned to requirements -->
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ["Inter", "sans-serif"],
+              mono: ["JetBrains Mono", "monospace"]
+            },
+            colors: {
+              // Custom hex colors matching the exact RGB values from guidelines
+              brandBlue: "rgb(20, 120, 167)",      // `#1478a7`
+              brandDarkBlue: "rgb(15, 48, 98)",   // `#0f3062`
+              brandLightBlue: "rgb(82, 181, 217)", // `#52b5d9`
+              brandRed: "rgb(255, 115, 105)"       // `#ff7369`
+            }
+          }
+        }
+      }
+    </script>
+
+    <style>
+      /* Custom map layout & micro-animations */
+      #leaflet-map-canvas {
+        min-height: 380px;
+        height: 100%;
+        width: 100%;
+      }
+      
+      /* Make active selected marker pulse gently on map */
+      @keyframes pulse-marker {
+        0% {
+          stroke-width: 2px;
+          stroke-opacity: 1;
+        }
+        50% {
+          stroke-width: 8px;
+          stroke-opacity: 0.55;
+        }
+        100% {
+          stroke-width: 2px;
+          stroke-opacity: 1;
+        }
+      }
+      .pulse-active-selected {
+        animation: pulse-marker 1.6s infinite ease-in-out;
+        stroke: #ffffff !important;
+      }
+      
+      /* Webkit scrollbar customization to look like a premium dock */
+      #buoy-buttons-list::-webkit-scrollbar {
+        width: 6px;
+      }
+      #buoy-buttons-list::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.05);
+      }
+      #buoy-buttons-list::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 3px;
+      }
+      #buoy-buttons-list::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.45);
+      }
+    </style>
+  </head>
+  <body class="bg-white text-slate-800 font-sans min-h-screen pb-16 antialiased">
+
+    <!-- Header Navigation Section -->
+    <header class="border-b border-slate-100 bg-white sticky top-0 z-40 backdrop-blur-md/90 shadow-sm px-6 py-4" id="network-header">
+      <div class="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
+        
+        <!-- Left Side: App Name and Network Information -->
+        <div class="flex items-center gap-3" id="brand-panel">
+          <div class="bg-brandDarkBlue text-white p-3 rounded-2xl shadow-lg flex items-center justify-center">
+            <!-- Ocean Waves Indicator SVG icon -->
+            <svg class="w-6 h-6 text-brandLightBlue animate-pulse" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm14.024-.983a1.125 1.125 0 010 1.966l-5.603 3.113A1.125 1.125 0 019 15.113V8.887c0-.857.921-1.4 1.671-.983l5.603 3.113z" />
+            </svg>
+          </div>
+          <div>
+            <h1 class="text-xl font-black tracking-tight text-brandDarkBlue flex items-center gap-2">
+              <span>ICATMAR Oceanographic Buoys</span>
+              <span class="text-xs bg-brandLightBlue/20 text-brandBlue px-2.5 py-0.5 rounded-full font-bold border border-brandLightBlue/30">
+                FAST API
+              </span>
+            </h1>
+            <p class="text-xs text-gray-400">
+              Catalan Coast Real-Time Coastal Monitoring Platform
+            </p>
+          </div>
+        </div>
+
+        <!-- Right Side: Real-Time system stats -->
+        <div class="flex items-center gap-3 text-xs font-mono self-start md:self-auto bg-slate-50 border border-slate-200/60 rounded-xl px-4 py-2" id="ticker-panel">
+          <span class="text-slate-500 flex items-center gap-1.5 font-medium">
+            <span class="w-2 h-2 rounded-full bg-brandBlue animate-ping inline-block"></span>
+            <span>UTC Clock: <b id="utc-clock-value" class="text-slate-800">--:--:--</b></span>
+          </span>
+          <!-- Dynamic Mock Data Indicator (Shown if CORS/Network triggers simulator) -->
+          <div id="demo-mode-indicator-badge" class="hidden flex items-center gap-1.5 text-brandRed font-bold" id="offline-simulation-badge">
+            <span class="inline-block w-2 h-2 rounded-full bg-brandRed animate-pulse"></span>
+            <span>SIMULATOR ACTIVE</span>
+          </div>
+        </div>
+
+      </div>
+    </header>
+
+    <!-- Main Container Layout -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 mt-6 space-y-6" id="dashboard-canvas">
+      
+      <!-- Top Section: Station Controls & Interactive Map Representation -->
+      <section class="grid grid-cols-1 lg:grid-cols-3 gap-6" id="buoy-map-split-dashboard">
+        
+        <!-- Buoys Buttons Selector: Background dark blue (--darkBlue) and white text -->
+        <div class="lg:col-span-1 flex flex-col h-[400px] lg:h-auto" id="switcher-panel">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-xs font-extrabold tracking-wider text-brandDarkBlue uppercase flex items-center gap-1.5">
+              <span>Station Selector</span>
+            </h3>
+            <span class="text-[10px] text-gray-400 font-mono font-medium">Catalan Grid Grid</span>
+          </div>
+
+          <!-- The layout element as required (dark blue background with white text, scrollable list of buttons) -->
+          <div 
+            id="buoy-buttons-list"
+            class="flex-1 overflow-y-auto space-y-2 p-3 bg-brandDarkBlue rounded-2xl shadow-inner border border-brandDarkBlue/80 h-[380px]"
+          >
+            <!-- Generated dynamically in app.js -->
+            <div class="h-full flex flex-col items-center justify-center text-center p-6 text-white/40">
+              <div class="w-6 h-6 rounded-full border border-white/30 border-t-white animate-spin mb-2"></div>
+              <span class="text-xs font-medium">Syncing with buoy network...</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Interactive Map frame -->
+        <div class="lg:col-span-2 h-[400px] rounded-2xl overflow-hidden border border-brandLightBlue bg-slate-50 shadow-sm relative" id="map-panel">
+          
+          <!-- Concrete Canvas container referenced by Leaflet map -->
+          <div id="leaflet-map-canvas" class="z-10"></div>
+          
+          <!-- Legend on the Map as requested showing color indicator codes -->
+          <div class="absolute bottom-3 left-3 z-20 bg-white/95 backdrop-blur-md px-3.5 py-2.5 rounded-xl border border-slate-200/80 shadow-md text-[11px]" id="map-legend">
+            <h5 class="font-extrabold text-brandDarkBlue mb-1.5">Latency Status</h5>
+            <div class="flex flex-col gap-1.5 text-slate-600">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 border border-white max-w-full shadow-sm"></span>
+                <span>Active ( &lt; 5 hours )</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-amber-500 border border-white max-w-full shadow-sm"></span>
+                <span>Delayed ( &lt; 2 days )</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-slate-400 border border-white max-w-full shadow-sm"></span>
+                <span>Offline ( &gt; 2 days )</span>
+              </div>
+              <div class="h-px bg-slate-100 my-1"></div>
+              <div class="flex items-center gap-2 font-bold text-slate-800">
+                <span class="w-2.5 h-2.5 rounded-full bg-brandRed border border-white max-w-full shadow-md animate-pulse"></span>
+                <span>Selected Station</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </section>
+
+      <!-- Sliding timeline Control Frame: Now to 7 Days back range -->
+      <section class="bg-slate-50 border border-slate-200/60 rounded-2xl p-4 shadow-sm" id="sliding-timeline-navigation">
+        <div class="flex flex-col sm:flex-row items-center justify-between gap-4">
+          
+          <!-- Left Button: -3 days ago -->
+          <div class="flex items-center" id="shift-backward-side">
+            <button
+              id="shift-left-btn"
+              type="button"
+              class="px-5 py-2.5 bg-brandDarkBlue text-white hover:bg-brandBlue rounded-xl font-bold text-xs tracking-tight shadow-md hover:shadow-lg transition-all duration-200 transform active:scale-95 cursor-pointer"
+            >
+              ← -3 Days Ago
+            </button>
+          </div>
+
+          <!-- Centered Window Title Info -->
+          <div class="text-center" id="timeline-range-badge">
+            <span class="text-[9px] font-extrabold tracking-wider text-brandBlue uppercase block mb-1">
+              Active Analytical Viewport (7 Days sliding span)
+            </span>
+            <div id="analysis-window-dates-label" class="inline-flex items-center gap-2 px-4 py-1.5 bg-white border border-slate-200/80 rounded-full text-xs font-bold font-mono text-slate-700 shadow-inner">
+              <span class="text-slate-400 animate-pulse">Calculating epochs...</span>
+            </div>
+          </div>
+
+          <!-- Right side buttons: Now and +3 Days ahead (appear conditionally if Now is not visible in graph) -->
+          <div id="sliding-controls-right-side" class="hidden items-center gap-2">
+            <button
+              id="shift-right-btn"
+              type="button"
+              class="px-5 py-2.5 bg-brandDarkBlue text-white hover:bg-brandBlue rounded-xl font-bold text-xs tracking-tight shadow-md hover:shadow-lg transition-all duration-200 transform active:scale-95 cursor-pointer"
+            >
+              +3 Days Ahead →
+            </button>
+            <button
+              id="reset-now-btn"
+              type="button"
+              class="px-5 py-2.5 bg-brandRed text-white hover:bg-brandRed/90 rounded-xl font-extrabold text-xs tracking-tight shadow-md hover:shadow-lg transition-all duration-200 transform active:scale-95 cursor-pointer"
+            >
+              Now
+            </button>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- Data Visualizations per sensor -->
+      <section class="bg-white border border-slate-100 rounded-3xl p-6 shadow-sm space-y-6" id="measurements-visual-hub">
+        
+        <div class="border-b border-slate-100 pb-4 flex flex-col md:flex-row md:items-center justify-between gap-4" id="visuals-header">
+          <div>
+            <h2 class="text-lg font-black tracking-tight text-brandDarkBlue flex items-center gap-2">
+              <span>Telemetry Variables Per Sensor</span>
+            </h2>
+            <p class="text-xs text-gray-400">
+              Each sensor parses multiple maritime parameters. Scaled factors automatically implemented from Netlify guidelines.
+            </p>
+          </div>
+        </div>
+
+        <!-- Tab control deck for active buoy sensors -->
+        <div id="sensors-tabs-list" class="flex flex-wrap gap-2 pt-2">
+          <!-- Populated dynamically via app.js -->
+        </div>
+
+        <!-- Rendered Plotted Splines (Highcharts containers inline-generated per sensor) -->
+        <div id="analytics-charts-renderer" class="pt-2">
+          <!-- Highcharts renders here -->
+        </div>
+
+      </section>
+
+    </main>
+
+    <!-- Leaflet Script CDN -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    
+    <!-- Highcharts Bundle Script CDN -->
+    <script src="https://code.highcharts.com/highcharts.js"></script>
+    <script src="https://code.highcharts.com/modules/exporting.js"></script>
+
+    <!-- Main Core Script -->
+    <script src="/app.js"></script>
+  </body>
+</html>
