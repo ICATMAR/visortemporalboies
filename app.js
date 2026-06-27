@@ -517,14 +517,14 @@ function selectBuoy(buoyId) {
 }
 
 // Fetch detailed data for selected buoy
-function fetchBuoyData(buoyId, requestedLimit = 5000) {
+function fetchBuoyData(buoyId, requestedLimit = 5000, forceRefresh = false) {
   const buoyObj = state.buoys.find(b => b.id === buoyId);
   if (!buoyObj) return;
 
   const buoyName = buoyObj.name;
 
   const cached = state.buoyDataCache[buoyId];
-  if (cached && !cached._isDemo && cached._limit >= requestedLimit) {
+  if (!forceRefresh && cached && !cached._isDemo && cached._limit >= requestedLimit) {
     state.activeSensorTab = getAvailableSensors(cached)[0] || null;
     renderSensorsTabBar();
     renderPlottedGraphs();
@@ -589,6 +589,50 @@ function getAvailableSensors(payload) {
     });
   });
   return Array.from(sensors);
+}
+
+function refreshBuoyList() {
+  fetch("https://api.icatmar.cat/MSM_fast_api/buoys")
+    .then(res => {
+      if (!res.ok) throw new Error("API base response status: " + res.status);
+      return res.json();
+    })
+    .then(data => {
+      if (!data || !Array.isArray(data.buoys) || data.buoys.length === 0) return;
+
+      const newBuoys = data.buoys;
+      const oldMap = Object.fromEntries(state.buoys.map(b => [b.id, b.latestTimestamp]));
+      let changed = newBuoys.length !== state.buoys.length;
+
+      newBuoys.forEach(b => {
+        if (!oldMap[b.id] || oldMap[b.id] !== b.latestTimestamp) {
+          changed = true;
+        }
+      });
+
+      if (!changed) return;
+
+      const oldSelectedTimestamp = oldMap[state.selectedBuoyId];
+      const newSelected = newBuoys.find(b => b.id === state.selectedBuoyId);
+      const selectedChanged = newSelected && newSelected.latestTimestamp !== oldSelectedTimestamp;
+
+      state.buoys = newBuoys;
+      if (!newSelected && newBuoys.length > 0) {
+        state.selectedBuoyId = newBuoys[0].id;
+      }
+
+      renderBuoyList();
+      updateMapMarkers();
+
+      if (!newSelected && state.selectedBuoyId) {
+        selectBuoy(state.selectedBuoyId);
+      } else if (selectedChanged && state.selectedBuoyId) {
+        fetchBuoyData(state.selectedBuoyId, 5000, true);
+      }
+    })
+    .catch(err => {
+      console.warn("Buoy refresh failed", err);
+    });
 }
 
 // Render interactive sensor toggle buttons
@@ -757,7 +801,7 @@ function renderPlottedGraphs() {
         })
         .filter(p => p !== null);
 
-      const isDirectionalTrack = key === "WSPD" || key === "GSPD" || key === "VGHS";
+      const isDirectionalTrack = key === "WSPD" || key === "VGHS";
 
       return {
         name: nameLabel,
@@ -774,35 +818,34 @@ function renderPlottedGraphs() {
         dataLabels: {
           enabled: isDirectionalTrack,
           useHTML: true,
-          allowOverlap: true, // Prevents Highcharts from hiding overlaps automatically
-          crop: false,         // Prevents clipping near boundaries
-          overflow: 'allow',   // Prevents clipping
-          zIndex: 10,          // Renders on top of everything
+          allowOverlap: true,
+          crop: false,
+          overflow: 'allow',
+          zIndex: 1,
           formatter: function() {
             const ptTime = this.x;
             const ptObj = rawList.find(pt => pt.time === ptTime);
             if (!ptObj) return null;
 
             let deg = null;
-            if (key === "WSPD") deg = ptObj.values["WDIR"];
-            else if (key === "GSPD") deg = ptObj.values["GDIR"];
-            else if (key === "VGHS") deg = ptObj.values["VPED"] !== null ? ptObj.values["VPED"] : ptObj.values["VMDR"];
-
+            if (key === "WSPD") {
+              deg = ptObj.values["WDIR"];
+            } else if (key === "VGHS") {
+              deg = (ptObj.values["VPED"] !== null && ptObj.values["VPED"] !== undefined)
+                ? ptObj.values["VPED"]
+                : ptObj.values["VMDR"];
+            }
             if (deg === null || deg === undefined || isNaN(deg)) return null;
 
-            const ptIndex = this.point.index;
-            const totalPoints = this.series.data.length;
-            // Draw clean periodic arrow indicators to avoid cluttering graphs
-            const step = totalPoints > 200 ? 24 : (totalPoints > 50 ? 12 : 6);
-            if (ptIndex % step !== 0) return null;
+            const chart = this.series.chart;
+            const extremes = chart.xAxis[0].getExtremes();
+            const visiblePoints = this.series.points.filter(pt => pt.x >= extremes.min && pt.x <= extremes.max);
+            const step = Math.max(1, Math.ceil(visiblePoints.length / 12));
+            const visibleIndex = visiblePoints.findIndex(pt => pt.x === this.x);
+            if (visibleIndex < 0 || visibleIndex % step !== 0) return null;
 
-            return `
-              <div class="shadow-md" style="width: 18px; height: 18px; border-radius: 50%; background: rgb(255, 115, 105); display: flex; align-items: center; justify-content: center; transform: translate(-1px, -1px); box-shadow: 0 1px 3px rgba(0,0,0,0.3); border: 1px solid #ffffff; z-index: 99999; pointer-events: none;">
-                <span class="direction-arrow-glyph" style="display: inline-block; transform: rotate(${deg}deg); font-weight: 900; font-size: 13px; color: #ffffff; line-height: 1;">↑</span>
-              </div>
-            `;
+            return `<span style="display:inline-block; transform: rotate(${deg}deg); font-size: 11px; color: rgb(20,120,167); line-height: 1; text-shadow: 0 0 1px rgba(0,0,0,0.2);">↑</span>`;
           },
-          y: -14,
           style: {
             textOutline: 'none'
           }
@@ -814,6 +857,34 @@ function renderPlottedGraphs() {
     window.Highcharts.chart(card, {
       chart: {
         type: 'spline',
+        zoomType: 'x',
+        pinchType: 'x',
+        events: {
+          render: function() {
+            const chart = this;
+            const fixedY = chart.plotTop * 0;
+            chart.series.forEach(series => {
+              if (!series.options || !series.options.dataLabels || !series.options.dataLabels.enabled) return;
+              if (!series.points) return;
+              series.points.forEach(point => {
+                if (point.dataLabel) {
+                  point.dataLabel.attr({ y: fixedY });
+                }
+              });
+            });
+          }
+        },
+        resetZoomButton: {
+          theme: {
+            fill: 'rgba(20,120,167,0.08)',
+            stroke: 'rgb(20,120,167)',
+            r: 8,
+            style: {
+              color: '#0f3062',
+              fontSize: '11px'
+            }
+          }
+        },
         backgroundColor: '#ffffff',
         style: {
           fontFamily: 'Inter, system-ui, sans-serif'
@@ -876,6 +947,9 @@ function renderPlottedGraphs() {
         borderWidth: 1.5,
         shadow: true,
         useHTML: true,
+        style: {
+          zIndex: '999999'
+        },
         formatter: function() {
           const ptTime = this.x;
           const ptObj = rawList.find(pt => pt.time === ptTime);
@@ -1061,6 +1135,9 @@ document.addEventListener("DOMContentLoaded", () => {
         selectBuoy(state.selectedBuoyId);
       }
     });
+
+  // Poll the buoy list once per minute and only redraw if latest timestamps changed
+  setInterval(refreshBuoyList, 60_000);
 
   // Start internal ticker for standard user readability
   const systemTicker = document.getElementById("utc-clock-value");
