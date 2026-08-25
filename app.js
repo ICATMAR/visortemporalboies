@@ -288,7 +288,7 @@ function generateMockRecords(buoyId, buoyName) {
         pressure: String((12.4 + 0.3 * Math.sin(i / 10) + Math.random() * 0.02).toFixed(2)), // in dbar
         SNUM: String(54300 + i) // samples counter
       },
-      "Olas": {
+      "Waves": {
         VGHS: waveH.toFixed(3),
         VMAX: (waveH * 1.6 + Math.random() * 0.08).toFixed(3), // Peak maximum wave height, always taller than significant
         VGHMAX: (waveH * 1.6 + Math.random() * 0.08).toFixed(3),
@@ -668,7 +668,7 @@ function renderSensorsTabBar() {
 
     // Insert icons dynamically
     let emoji = "🧭";
-    if (sensor === "Olas") emoji = "🌊";
+    if (sensor === "Waves") emoji = "🌊";
     if (sensor === "Gill" || sensor.includes("WND")) emoji = "💨";
     if (sensor === "ADCP" || sensor.includes("TMP")) emoji = "🌡️";
 
